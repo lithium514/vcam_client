@@ -24,7 +24,10 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
 
     steps:
       - name: Checkout
@@ -47,31 +50,40 @@ jobs:
         with:
           workspaces: "src-tauri"
 
-      - name: Install Tauri system dependencies
+      - name: Install Tauri system dependencies (Linux)
+        if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev \
             libappindicator3-dev \
             librsvg2-dev \
-            patchelf
+            patchelf \
+            rpm
+
+      - name: Download Windows tools
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: .\scripts\download-windows-tools.ps1
 
       - name: Build frontend
         run: npm run build
 
-      - name: Build Tauri (Rust)
+      - name: Build Tauri (debug)
         run: cargo build --manifest-path src-tauri/Cargo.toml
 
       - name: Upload frontend artifact
         uses: actions/upload-artifact@v4
         with:
-          name: frontend-dist
+          name: frontend-dist-${{ matrix.os }}
           path: dist/
           retention-days: 7
 
       - name: Upload Tauri binary (debug)
         uses: actions/upload-artifact@v4
         with:
-          name: tauri-binary-debug
-          path: src-tauri/target/debug/vcam_client
+          name: tauri-binary-debug-${{ matrix.os }}
+          path: |
+            src-tauri/target/debug/vcam_client
+            src-tauri/target/debug/vcam_client.exe
           retention-days: 7

@@ -10,7 +10,10 @@ permissions:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
 
     steps:
       - name: Checkout
@@ -36,14 +39,21 @@ jobs:
         with:
           workspaces: "src-tauri"
 
-      - name: Install Tauri system dependencies
+      - name: Install Tauri system dependencies (Linux)
+        if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev \
             libappindicator3-dev \
             librsvg2-dev \
-            patchelf
+            patchelf \
+            rpm
+
+      - name: Download Windows tools
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: .\scripts\download-windows-tools.ps1
 
       - name: Build Tauri app (release)
         run: npm run tauri build
@@ -51,9 +61,10 @@ jobs:
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: tauri-release-${{ github.ref_name }}
+          name: tauri-release-${{ matrix.os }}-${{ github.ref_name }}
           path: |
             src-tauri/target/release/vcam_client
+            src-tauri/target/release/vcam_client.exe
             src-tauri/target/release/bundle/**
           retention-days: 90
 
@@ -62,8 +73,9 @@ jobs:
         with:
           name: ${{ github.ref_name }}
           tag_name: ${{ github.ref_name }}
-          generate_release_notes: true
-          fail_on_unmatched_files: true
+          generate_release_notes: ${{ matrix.os == 'ubuntu-latest' }}
+          fail_on_unmatched_files: false
           files: |
             src-tauri/target/release/vcam_client
+            src-tauri/target/release/vcam_client.exe
             src-tauri/target/release/bundle/**

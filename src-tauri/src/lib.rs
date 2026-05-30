@@ -1,8 +1,21 @@
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
+
+fn find_binary(app: &AppHandle, name: &str) -> String {
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        for candidate in [name, &format!("{name}.exe")] {
+            let path: PathBuf = resource_dir.join(candidate);
+            if path.exists() {
+                return path.to_string_lossy().to_string();
+            }
+        }
+    }
+    name.to_string()
+}
 
 struct TunnelState {
     child: Child,
@@ -13,6 +26,7 @@ struct SshTunnel(Mutex<Option<TunnelState>>);
 
 #[tauri::command]
 fn start_ssh_tunnel(
+    app: AppHandle,
     host: String,
     port: u16,
     user: String,
@@ -47,7 +61,8 @@ fn start_ssh_tunnel(
 
     std::thread::sleep(std::time::Duration::from_secs(1));
 
-    let adb_output = Command::new("adb")
+    let adb_path = find_binary(&app, "adb");
+    let adb_output = Command::new(adb_path)
         .arg("connect")
         .arg(format!("localhost:{local_port}"))
         .output()
@@ -67,7 +82,7 @@ fn start_ssh_tunnel(
 }
 
 #[tauri::command]
-fn stop_ssh_tunnel(state: State<SshTunnel>) -> Result<String, String> {
+fn stop_ssh_tunnel(app: AppHandle, state: State<SshTunnel>) -> Result<String, String> {
     let mut guard = state.0.lock().map_err(|e| e.to_string())?;
 
     match guard.take() {
@@ -75,7 +90,8 @@ fn stop_ssh_tunnel(state: State<SshTunnel>) -> Result<String, String> {
             child.kill().map_err(|e| format!("Failed to kill ssh: {e}"))?;
             child.wait().ok();
 
-            let _ = Command::new("adb")
+            let adb_path = find_binary(&app, "adb");
+            let _ = Command::new(adb_path)
                 .arg("disconnect")
                 .arg(format!("localhost:{local_port}"))
                 .output();
@@ -131,8 +147,9 @@ fn rand_boundary() -> String {
 // ── scrcpy launcher ──
 
 #[tauri::command]
-fn launch_scrcpy(audio_codec: Option<String>, audio_encoder: Option<String>) -> Result<String, String> {
-    let mut cmd = Command::new("scrcpy");
+fn launch_scrcpy(app: AppHandle, audio_codec: Option<String>, audio_encoder: Option<String>) -> Result<String, String> {
+    let scrcpy_path = find_binary(&app, "scrcpy");
+    let mut cmd = Command::new(scrcpy_path);
 
     if let Some(codec) = &audio_codec {
         if !codec.is_empty() {
@@ -172,8 +189,9 @@ fn start_screencap(
     let running = state.0.clone();
 
     thread::spawn(move || {
+        let adb_path = find_binary(&app, "adb");
         while running.load(Ordering::SeqCst) {
-            let output = Command::new("adb")
+            let output = Command::new(&adb_path)
                 .args(["exec-out", "screencap", "-p"])
                 .stdout(Stdio::piped())
                 .stderr(Stdio::null())

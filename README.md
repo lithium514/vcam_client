@@ -24,8 +24,8 @@ Backend (Rust)
 - [Node.js](https://nodejs.org/) 20+
 - [Rust](https://rustup.rs/) toolchain
 - [Tauri 2 system dependencies](https://v2.tauri.app/start/prerequisites/)
-- [ADB](https://developer.android.com/tools/adb) (on `PATH`)
-- [scrcpy](https://github.com/Genymobile/scrcpy) (optional, for screen mirroring)
+- [ADB](https://developer.android.com/tools/adb) (on `PATH` for non-Windows / dev mode)
+- [scrcpy](https://github.com/Genymobile/scrcpy) (optional, for screen mirroring; only needed on `PATH` for non-Windows / dev mode)
 
 ## Development
 
@@ -37,13 +37,37 @@ npm install
 npm run tauri dev
 ```
 
-## Build
+> **Note:** In dev mode (`tauri dev`), `adb` and `scrcpy` must be on your `PATH` as before.
 
+## Build (Windows)
+
+The Windows installer includes `adb` and `scrcpy` binaries automatically.  
+Run the download script **before** building:
+
+### PowerShell
+```powershell
+.\scripts\download-windows-tools.ps1
+```
+
+### Bash (MSYS2/Git Bash)
+```bash
+./scripts/download-windows-tools.sh
+```
+
+Then build:
 ```bash
 npm run tauri build
 ```
 
 The distributable will be placed in `src-tauri/target/release/bundle/`.
+
+## Build (Linux / macOS)
+
+```bash
+npm run tauri build
+```
+
+`adb` and `scrcpy` are **not** bundled — they must be on `PATH` at runtime.
 
 ## Usage
 
