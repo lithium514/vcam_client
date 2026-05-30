@@ -9,11 +9,8 @@ permissions:
   contents: write
 
 jobs:
-  release:
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+  build-linux:
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
@@ -39,8 +36,7 @@ jobs:
         with:
           workspaces: "src-tauri"
 
-      - name: Install Tauri system dependencies (Linux)
-        if: matrix.os == 'ubuntu-latest'
+      - name: Install Tauri system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -50,32 +46,89 @@ jobs:
             patchelf \
             rpm
 
+      - name: Build Tauri app (release)
+        run: npm run tauri build
+
+      - name: Upload bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundle-linux
+          path: src-tauri/target/release/bundle/
+          retention-days: 7
+
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri"
+
       - name: Download Windows tools
-        if: matrix.os == 'windows-latest'
         shell: pwsh
         run: .\scripts\download-windows-tools.ps1
 
       - name: Build Tauri app (release)
         run: npm run tauri build
 
-      - name: Upload release artifacts
+      - name: Upload bundle
         uses: actions/upload-artifact@v4
         with:
-          name: tauri-release-${{ matrix.os }}-${{ github.ref_name }}
-          path: |
-            src-tauri/target/release/vcam_client
-            src-tauri/target/release/vcam_client.exe
-            src-tauri/target/release/bundle/**
-          retention-days: 90
+          name: bundle-windows
+          path: src-tauri/target/release/bundle/
+          retention-days: 7
+
+  package:
+    needs: [build-linux, build-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download Linux bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: bundle-linux
+          path: dist/linux
+
+      - name: Download Windows bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: bundle-windows
+          path: dist/windows
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           name: ${{ github.ref_name }}
           tag_name: ${{ github.ref_name }}
-          generate_release_notes: ${{ matrix.os == 'ubuntu-latest' }}
+          generate_release_notes: true
           fail_on_unmatched_files: false
           files: |
-            src-tauri/target/release/vcam_client
-            src-tauri/target/release/vcam_client.exe
-            src-tauri/target/release/bundle/**
+            dist/linux/deb/*.deb
+            dist/linux/rpm/*.rpm
+            dist/linux/appimage/*.AppImage
+            dist/windows/msi/*.msi
+            dist/windows/nsis/*.exe
