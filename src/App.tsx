@@ -8,6 +8,7 @@ type Tab = "camera" | "scrcpy";
 function CameraTab({ uploadUrl }: { uploadUrl: string }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [facingMode, setFacingMode] = useState(() => localStorage.getItem("camera_facingMode") || "environment");
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [capturedBlob, setCapturedBlob] = useState<Blob | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -15,14 +16,14 @@ function CameraTab({ uploadUrl }: { uploadUrl: string }) {
   const [message, setMessage] = useState("");
 
   useEffect(() => {
-    startCamera();
+    startCamera(facingMode);
     return () => stopCamera();
-  }, []);
+  }, [facingMode]);
 
-  async function startCamera() {
+  async function startCamera(facing: string) {
     try {
       const s = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "environment" },
+        video: { facingMode: facing },
         audio: false,
       });
       setStream(s);
@@ -30,6 +31,12 @@ function CameraTab({ uploadUrl }: { uploadUrl: string }) {
     } catch {
       setMessage("Camera access denied");
     }
+  }
+
+  function toggleFacing() {
+    const next = facingMode === "environment" ? "user" : "environment";
+    setFacingMode(next);
+    localStorage.setItem("camera_facingMode", next);
   }
 
   function stopCamera() {
@@ -110,9 +117,12 @@ function CameraTab({ uploadUrl }: { uploadUrl: string }) {
 
       <div className="controls">
         {!capturedBlob ? (
-          <button className="shutter" onClick={capture}>
-            📷 Capture
-          </button>
+          <>
+            <button className="btn flip-btn" onClick={toggleFacing}>↻</button>
+            <button className="shutter" onClick={capture}>
+              📷 Capture
+            </button>
+          </>
         ) : (
           <>
             <button className="btn" onClick={retake}>Retake</button>
@@ -129,10 +139,10 @@ function CameraTab({ uploadUrl }: { uploadUrl: string }) {
 }
 
 function ScrcpyTab() {
-  const [host, setHost] = useState("");
-  const [port, setPort] = useState("22");
-  const [user, setUser] = useState("");
-  const [localPort, setLocalPort] = useState("5555");
+  const [host, setHost] = useState(() => localStorage.getItem("scrcpy_host") || "");
+  const [port, setPort] = useState(() => localStorage.getItem("scrcpy_port") || "22");
+  const [user, setUser] = useState(() => localStorage.getItem("scrcpy_user") || "");
+  const [localPort, setLocalPort] = useState(() => localStorage.getItem("scrcpy_localPort") || "5555");
   const [audioCodec, setAudioCodec] = useState(() => localStorage.getItem("scrcpy_audioCodec") || "aac");
   const [audioEncoder, setAudioEncoder] = useState(() => localStorage.getItem("scrcpy_audioEncoder") || "");
   const [connected, setConnected] = useState(false);
@@ -250,10 +260,10 @@ function ScrcpyTab() {
   return (
     <div className="tab-content">
       <div className="ssh-form">
-        <input value={host} onChange={(e) => setHost(e.target.value)} placeholder="SSH Host" className="input" disabled={connected} />
-        <input value={port} onChange={(e) => setPort(e.target.value)} placeholder="Port" className="input input-sm" disabled={connected} />
-        <input value={user} onChange={(e) => setUser(e.target.value)} placeholder="SSH User" className="input" disabled={connected} />
-        <input value={localPort} onChange={(e) => setLocalPort(e.target.value)} placeholder="Local Port" className="input input-sm" disabled={connected} />
+        <input value={host} onChange={(e) => { setHost(e.target.value); localStorage.setItem("scrcpy_host", e.target.value); }} placeholder="SSH Host" className="input" disabled={connected} />
+        <input value={port} onChange={(e) => { setPort(e.target.value); localStorage.setItem("scrcpy_port", e.target.value); }} placeholder="Port" className="input input-sm" disabled={connected} />
+        <input value={user} onChange={(e) => { setUser(e.target.value); localStorage.setItem("scrcpy_user", e.target.value); }} placeholder="SSH User" className="input" disabled={connected} />
+        <input value={localPort} onChange={(e) => { setLocalPort(e.target.value); localStorage.setItem("scrcpy_localPort", e.target.value); }} placeholder="Local Port" className="input input-sm" disabled={connected} />
       </div>
 
       <div className="controls">
