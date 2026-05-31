@@ -71,20 +71,32 @@ fn start_ssh_tunnel(
     let stop = Arc::new(AtomicBool::new(false));
     let stop_clone = stop.clone();
     let local_port_owned = local_port;
+    let ready = Arc::new(AtomicBool::new(false));
+    let ready_clone = ready.clone();
 
     let handle = thread::spawn(move || {
-        if let Err(e) = run_tunnel(&host, port, &user, &password, key_path.as_deref(), key_passphrase.as_deref(), local_port_owned, &stop_clone) {
+        if let Err(e) = run_tunnel(&host, port, &user, &password, key_path.as_deref(), key_passphrase.as_deref(), local_port_owned, &stop_clone, &ready_clone) {
             eprintln!("SSH tunnel error: {e}");
         }
     });
 
-    // give it a moment to bind
-    thread::sleep(Duration::from_millis(500));
+    // wait for the tunnel to signal readiness (up to 15s)
+    for _ in 0..75 {
+        if ready.load(Ordering::SeqCst) {
+            break;
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
+    if !ready.load(Ordering::SeqCst) {
+        stop.store(true, Ordering::SeqCst);
+        let _ = handle.join();
+        return Err("SSH tunnel failed to start within 15s".into());
+    }
 
     let adb_path = find_binary(&app, "adb");
     let adb_output = Command::new(adb_path)
         .arg("connect")
-        .arg(format!("localhost:{local_port}"))
+        .arg(format!("127.0.0.1:{local_port}"))
         .output()
         .map_err(|e| format!("Failed to run adb connect: {e}"))?;
 
@@ -96,7 +108,7 @@ fn start_ssh_tunnel(
     Ok(format!("SSH tunnel established on localhost:{local_port}\n{combined}"))
 }
 
-fn run_tunnel(host: &str, port: u16, user: &str, password: &str, key_path: Option<&str>, key_passphrase: Option<&str>, local_port: u16, stop: &AtomicBool) -> Result<(), String> {
+fn run_tunnel(host: &str, port: u16, user: &str, password: &str, key_path: Option<&str>, key_passphrase: Option<&str>, local_port: u16, stop: &AtomicBool, ready: &AtomicBool) -> Result<(), String> {
     let tcp = TcpStream::connect(format!("{host}:{port}"))
         .map_err(|e| format!("TCP connect failed: {e}"))?;
 
@@ -145,6 +157,9 @@ fn run_tunnel(host: &str, port: u16, user: &str, password: &str, key_path: Optio
     let listener = TcpListener::bind(format!("127.0.0.1:{local_port}"))
         .map_err(|e| format!("Cannot bind local port {local_port}: {e}"))?;
     listener.set_nonblocking(true).ok();
+
+    // signal that the tunnel is ready
+    ready.store(true, Ordering::SeqCst);
 
     loop {
         if stop.load(Ordering::SeqCst) {
@@ -224,7 +239,7 @@ fn stop_ssh_tunnel(app: AppHandle, state: State<SshTunnel>) -> Result<String, St
             let adb_path = find_binary(&app, "adb");
             let _ = Command::new(adb_path)
                 .arg("disconnect")
-                .arg(format!("localhost:{local_port}"))
+                .arg(format!("127.0.0.1:{local_port}"))
                 .output();
 
             Ok("SSH tunnel stopped, ADB disconnected".into())
