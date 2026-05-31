@@ -325,19 +325,20 @@ h1 {
   align-items: center;
 }
 
-.flip-btn {
-  font-size: 1.3rem;
-  background: #333;
-  color: #fff;
-  padding: 10px 14px;
-  border: none;
+.camera-select {
+  padding: 8px 10px;
   border-radius: 8px;
+  border: 1px solid #444;
+  background: #2a2a2a;
+  color: #fff;
+  font-size: 0.85rem;
+  max-width: 160px;
   cursor: pointer;
-  transition: background 0.2s;
+  outline: none;
 }
 
-.flip-btn:hover {
-  background: #555;
+.camera-select:focus {
+  border-color: #396cd8;
 }
 
 .shutter {

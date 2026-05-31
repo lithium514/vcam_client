@@ -8,7 +8,8 @@ type Tab = "camera" | "scrcpy";
 function CameraTab({ uploadUrl }: { uploadUrl: string }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [facingMode, setFacingMode] = useState(() => localStorage.getItem("camera_facingMode") || "environment");
+  const [cameras, setCameras] = useState<MediaDeviceInfo[]>([]);
+  const [selectedDeviceId, setSelectedDeviceId] = useState(() => localStorage.getItem("camera_deviceId") || "");
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [capturedBlob, setCapturedBlob] = useState<Blob | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -16,14 +17,27 @@ function CameraTab({ uploadUrl }: { uploadUrl: string }) {
   const [message, setMessage] = useState("");
 
   useEffect(() => {
-    startCamera(facingMode);
-    return () => stopCamera();
-  }, [facingMode]);
+    navigator.mediaDevices.enumerateDevices().then((devices) => {
+      const videoDevices = devices.filter((d) => d.kind === "videoinput");
+      setCameras(videoDevices);
+      if (!selectedDeviceId && videoDevices.length > 0) {
+        const id = videoDevices[0].deviceId;
+        setSelectedDeviceId(id);
+        localStorage.setItem("camera_deviceId", id);
+      }
+    });
+  }, []);
 
-  async function startCamera(facing: string) {
+  useEffect(() => {
+    if (selectedDeviceId) startCamera(selectedDeviceId);
+    return () => stopCamera();
+  }, [selectedDeviceId]);
+
+  async function startCamera(deviceId: string) {
+    stopCamera();
     try {
       const s = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: facing },
+        video: deviceId ? { deviceId: { exact: deviceId } } : true,
         audio: false,
       });
       setStream(s);
@@ -33,17 +47,17 @@ function CameraTab({ uploadUrl }: { uploadUrl: string }) {
     }
   }
 
-  function toggleFacing() {
-    const next = facingMode === "environment" ? "user" : "environment";
-    setFacingMode(next);
-    localStorage.setItem("camera_facingMode", next);
-  }
-
   function stopCamera() {
     if (stream) {
       stream.getTracks().forEach((t) => t.stop());
       setStream(null);
     }
+  }
+
+  function onCameraChange(e: React.ChangeEvent<HTMLSelectElement>) {
+    const id = e.target.value;
+    setSelectedDeviceId(id);
+    localStorage.setItem("camera_deviceId", id);
   }
 
   const capture = useCallback(() => {
@@ -118,7 +132,11 @@ function CameraTab({ uploadUrl }: { uploadUrl: string }) {
       <div className="controls">
         {!capturedBlob ? (
           <>
-            <button className="btn flip-btn" onClick={toggleFacing}>↻</button>
+            <select className="camera-select" value={selectedDeviceId} onChange={onCameraChange}>
+              {cameras.map((c) => (
+                <option key={c.deviceId} value={c.deviceId}>{c.label || `Camera ${c.deviceId.slice(0, 8)}`}</option>
+              ))}
+            </select>
             <button className="shutter" onClick={capture}>
               📷 Capture
             </button>
