@@ -160,6 +160,10 @@ function ScrcpyTab() {
   const [host, setHost] = useState(() => localStorage.getItem("scrcpy_host") || "");
   const [port, setPort] = useState(() => localStorage.getItem("scrcpy_port") || "22");
   const [user, setUser] = useState(() => localStorage.getItem("scrcpy_user") || "");
+  const [password, setPassword] = useState("");
+  const [useKey, setUseKey] = useState(() => localStorage.getItem("scrcpy_useKey") === "true");
+  const [keyPath, setKeyPath] = useState(() => localStorage.getItem("scrcpy_keyPath") || "");
+  const [keyPassphrase, setKeyPassphrase] = useState("");
   const [localPort, setLocalPort] = useState(() => localStorage.getItem("scrcpy_localPort") || "5555");
   const [audioCodec, setAudioCodec] = useState(() => localStorage.getItem("scrcpy_audioCodec") || "aac");
   const [audioEncoder, setAudioEncoder] = useState(() => localStorage.getItem("scrcpy_audioEncoder") || "");
@@ -200,6 +204,14 @@ function ScrcpyTab() {
       setMessage("Host and user are required");
       return;
     }
+    if (!useKey && !password) {
+      setMessage("Password is required");
+      return;
+    }
+    if (useKey && !keyPath) {
+      setMessage("Key path is required");
+      return;
+    }
     setConnecting(true);
     setMessage("");
     try {
@@ -207,7 +219,10 @@ function ScrcpyTab() {
         host,
         port: parseInt(port) || 22,
         user,
+        password,
         localPort: parseInt(localPort) || 5555,
+        keyPath: useKey ? keyPath : null,
+        keyPassphrase: keyPassphrase || null,
       });
       setConnected(true);
       setMessage(res);
@@ -281,8 +296,21 @@ function ScrcpyTab() {
         <input value={host} onChange={(e) => { setHost(e.target.value); localStorage.setItem("scrcpy_host", e.target.value); }} placeholder="SSH Host" className="input" disabled={connected} />
         <input value={port} onChange={(e) => { setPort(e.target.value); localStorage.setItem("scrcpy_port", e.target.value); }} placeholder="Port" className="input input-sm" disabled={connected} />
         <input value={user} onChange={(e) => { setUser(e.target.value); localStorage.setItem("scrcpy_user", e.target.value); }} placeholder="SSH User" className="input" disabled={connected} />
+        <input value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password" className="input" type="password" disabled={connected || useKey} />
         <input value={localPort} onChange={(e) => { setLocalPort(e.target.value); localStorage.setItem("scrcpy_localPort", e.target.value); }} placeholder="Local Port" className="input input-sm" disabled={connected} />
       </div>
+
+      <label className="key-toggle">
+        <input type="checkbox" checked={useKey} onChange={(e) => { setUseKey(e.target.checked); localStorage.setItem("scrcpy_useKey", String(e.target.checked)); }} disabled={connected} />
+        Use key file
+      </label>
+
+      {useKey && (
+        <div className="ssh-form">
+          <input value={keyPath} onChange={(e) => { setKeyPath(e.target.value); localStorage.setItem("scrcpy_keyPath", e.target.value); }} placeholder="Private key path (e.g. ~/.ssh/id_rsa)" className="input" disabled={connected} />
+          <input value={keyPassphrase} onChange={(e) => setKeyPassphrase(e.target.value)} placeholder="Key passphrase (optional)" className="input" type="password" disabled={connected} />
+        </div>
+      )}
 
       <div className="controls">
         {!connected ? (

@@ -202,6 +202,21 @@ h1 {
   opacity: 0.5;
 }
 
+.key-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #aaa;
+  font-size: 0.85rem;
+  cursor: pointer;
+  user-select: none;
+  width: 100%;
+}
+
+.key-toggle input {
+  accent-color: #396cd8;
+}
+
 .connect-btn {
   background: #396cd8;
   color: #fff;

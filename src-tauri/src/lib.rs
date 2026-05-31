@@ -1,24 +1,51 @@
-use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Duration;
+use ssh2::KeyboardInteractivePrompt;
 use tauri::{AppHandle, Emitter, Manager, State};
+
+struct PasswordPrompt(String);
+
+impl KeyboardInteractivePrompt for PasswordPrompt {
+    fn prompt<'a>(&mut self, _name: &str, _instruction: &str, prompts: &[ssh2::Prompt<'a>]) -> Vec<String> {
+        prompts.iter().map(|_| self.0.clone()).collect()
+    }
+}
 
 fn find_binary(app: &AppHandle, name: &str) -> String {
     if let Ok(resource_dir) = app.path().resource_dir() {
         for candidate in [name, &format!("{name}.exe")] {
-            let path: PathBuf = resource_dir.join(candidate);
+            let path = resource_dir.join(candidate);
             if path.exists() {
                 return path.to_string_lossy().to_string();
+            }
+        }
+        // fallback: search subdirectories recursively
+        if let Ok(entries) = resource_dir.read_dir() {
+            for entry in entries.flatten() {
+                if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                    for candidate in [name, &format!("{name}.exe")] {
+                        let path = entry.path().join(candidate);
+                        if path.exists() {
+                            return path.to_string_lossy().to_string();
+                        }
+                    }
+                }
             }
         }
     }
     name.to_string()
 }
 
+// ── SSH tunnel via ssh2 (no terminal window, password auth) ──
+
 struct TunnelState {
-    child: Child,
+    stop: Arc<AtomicBool>,
+    handle: Option<thread::JoinHandle<()>>,
     local_port: u16,
 }
 
@@ -30,36 +57,29 @@ fn start_ssh_tunnel(
     host: String,
     port: u16,
     user: String,
+    password: String,
     local_port: u16,
+    key_path: Option<String>,
+    key_passphrase: Option<String>,
     state: State<SshTunnel>,
 ) -> Result<String, String> {
     let mut guard = state.0.lock().map_err(|e| e.to_string())?;
-
     if guard.is_some() {
         return Err("SSH tunnel is already running".into());
     }
 
-    let child = Command::new("ssh")
-        .arg("-L")
-        .arg(format!("{local_port}:localhost:5555"))
-        .arg("-p")
-        .arg(port.to_string())
-        .arg("-N")
-        .arg("-o")
-        .arg("ExitOnForwardFailure=yes")
-        .arg("-o")
-        .arg("ServerAliveInterval=30")
-        .arg("-o")
-        .arg("StrictHostKeyChecking=no")
-        .arg(format!("{}@{}", user, host))
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| format!("Failed to spawn ssh: {e}"))?;
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_clone = stop.clone();
+    let local_port_owned = local_port;
 
-    guard.replace(TunnelState { child, local_port });
+    let handle = thread::spawn(move || {
+        if let Err(e) = run_tunnel(&host, port, &user, &password, key_path.as_deref(), key_passphrase.as_deref(), local_port_owned, &stop_clone) {
+            eprintln!("SSH tunnel error: {e}");
+        }
+    });
 
-    std::thread::sleep(std::time::Duration::from_secs(1));
+    // give it a moment to bind
+    thread::sleep(Duration::from_millis(500));
 
     let adb_path = find_binary(&app, "adb");
     let adb_output = Command::new(adb_path)
@@ -70,15 +90,124 @@ fn start_ssh_tunnel(
 
     let adb_msg = String::from_utf8_lossy(&adb_output.stdout).trim().to_string();
     let adb_err = String::from_utf8_lossy(&adb_output.stderr).trim().to_string();
-    let combined = if adb_err.is_empty() {
-        adb_msg
-    } else {
-        format!("{adb_msg} {adb_err}")
+    let combined = if adb_err.is_empty() { adb_msg } else { format!("{adb_msg} {adb_err}") };
+
+    guard.replace(TunnelState { stop, handle: Some(handle), local_port });
+    Ok(format!("SSH tunnel established on localhost:{local_port}\n{combined}"))
+}
+
+fn run_tunnel(host: &str, port: u16, user: &str, password: &str, key_path: Option<&str>, key_passphrase: Option<&str>, local_port: u16, stop: &AtomicBool) -> Result<(), String> {
+    let tcp = TcpStream::connect(format!("{host}:{port}"))
+        .map_err(|e| format!("TCP connect failed: {e}"))?;
+
+    let mut sess = ssh2::Session::new().map_err(|e| format!("ssh2 init: {e}"))?;
+    sess.set_tcp_stream(tcp);
+    sess.handshake().map_err(|e| format!("SSH handshake: {e}"))?;
+
+    // try agent first
+    let mut authed = false;
+    if sess.userauth_agent(user).is_ok() && sess.authenticated() {
+        authed = true;
+    }
+
+    // try public key if key_path provided
+    if !authed {
+        if let Some(kp) = key_path {
+            if !kp.is_empty() {
+                let pass: Option<&str> = key_passphrase.and_then(|p| if p.is_empty() { None } else { Some(p) });
+                let pubkey_str = format!("{kp}.pub");
+                let pubkey_path = if kp.ends_with(".ppk") { None } else { Some(std::path::Path::new(&pubkey_str)) };
+                if sess.userauth_pubkey_file(user, pubkey_path, std::path::Path::new(kp), pass).is_ok() && sess.authenticated() {
+                    authed = true;
+                }
+            }
+        }
+    }
+
+    // fall back to password
+    if !authed {
+        if sess.userauth_password(user, password).is_ok() && sess.authenticated() {
+            authed = true;
+        }
+        // some servers require keyboard-interactive for password
+        if !authed {
+            let pw = password.to_string();
+            if sess.userauth_keyboard_interactive(user, &mut PasswordPrompt(pw)).is_ok() && sess.authenticated() {
+                authed = true;
+            }
+        }
+    }
+
+    if !authed {
+        return Err("SSH authentication failed (tried agent, pubkey, password)".into());
+    }
+
+    let listener = TcpListener::bind(format!("127.0.0.1:{local_port}"))
+        .map_err(|e| format!("Cannot bind local port {local_port}: {e}"))?;
+    listener.set_nonblocking(true).ok();
+
+    loop {
+        if stop.load(Ordering::SeqCst) {
+            break;
+        }
+        match listener.accept() {
+            Ok((conn, _)) => {
+                let channel = match sess.channel_direct_tcpip("localhost", 5555, None) {
+                    Ok(ch) => ch,
+                    Err(_) => continue,
+                };
+                thread::spawn(|| forward_connection(conn, channel));
+            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(200));
+            }
+            Err(_) => break,
+        }
+    }
+
+    Ok(())
+}
+
+fn forward_connection(mut tcp: TcpStream, channel: ssh2::Channel) {
+    let channel = Arc::new(Mutex::new(channel));
+    let chan2 = channel.clone();
+    let mut tcp_clone = match tcp.try_clone() {
+        Ok(c) => c,
+        Err(_) => return,
     };
 
-    Ok(format!(
-        "SSH tunnel established on localhost:{local_port}\n{combined}"
-    ))
+    let t = thread::spawn(move || {
+        let mut buf = [0u8; 8192];
+        loop {
+            let n = match tcp_clone.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => n,
+                Err(_) => break,
+            };
+            let mut ch = chan2.lock().unwrap();
+            if ch.write(&buf[..n]).is_err() {
+                break;
+            }
+            ch.flush().ok();
+        }
+    });
+
+    let mut buf = [0u8; 8192];
+    loop {
+        let n = {
+            let mut ch = channel.lock().unwrap();
+            match ch.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => n,
+                Err(_) => break,
+            }
+        };
+        if tcp.write_all(&buf[..n]).is_err() {
+            break;
+        }
+    }
+
+    t.join().ok();
 }
 
 #[tauri::command]
@@ -86,9 +215,11 @@ fn stop_ssh_tunnel(app: AppHandle, state: State<SshTunnel>) -> Result<String, St
     let mut guard = state.0.lock().map_err(|e| e.to_string())?;
 
     match guard.take() {
-        Some(TunnelState { mut child, local_port }) => {
-            child.kill().map_err(|e| format!("Failed to kill ssh: {e}"))?;
-            child.wait().ok();
+        Some(TunnelState { stop, handle, local_port }) => {
+            stop.store(true, Ordering::SeqCst);
+            if let Some(h) = handle {
+                h.join().ok();
+            }
 
             let adb_path = find_binary(&app, "adb");
             let _ = Command::new(adb_path)
@@ -115,7 +246,6 @@ fn upload_image(url: String, data: Vec<u8>) -> Result<String, String> {
     let boundary = format!("----WebKitFormBoundary{}", rand_boundary());
 
     let mut body = Vec::new();
-    // header
     body.extend_from_slice(b"--");
     body.extend_from_slice(boundary.as_bytes());
     body.extend_from_slice(b"\r\n");
@@ -146,10 +276,25 @@ fn rand_boundary() -> String {
 
 // ── scrcpy launcher ──
 
+#[cfg(target_os = "windows")]
+fn hide_window() -> u32 {
+    0x08000000 // CREATE_NO_WINDOW
+}
+#[cfg(not(target_os = "windows"))]
+fn hide_window() -> u32 {
+    0
+}
+
 #[tauri::command]
 fn launch_scrcpy(app: AppHandle, audio_codec: Option<String>, audio_encoder: Option<String>) -> Result<String, String> {
     let scrcpy_path = find_binary(&app, "scrcpy");
     let mut cmd = Command::new(scrcpy_path);
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(hide_window());
+    }
 
     if let Some(codec) = &audio_codec {
         if !codec.is_empty() {
@@ -203,7 +348,6 @@ fn start_screencap(
                     let _ = app.emit("screencap-frame", &b64);
                 }
                 _ => {
-                    // device disconnected or error, stop loop
                     running.store(false, Ordering::SeqCst);
                     let _ = app.emit("screencap-error", "Screencap failed");
                     break;

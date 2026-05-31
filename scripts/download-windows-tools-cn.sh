@@ -13,7 +13,8 @@ echo "Downloading Windows tools to: ${OUTPUT_DIR}"
 echo ""
 echo "[1/2] Downloading ADB (platform-tools)..."
 ADB_ZIP="/tmp/platform-tools-latest-windows.zip"
-curl -fSL -o "$ADB_ZIP" "https://dl.google.com/android/repository/platform-tools-latest-windows.zip"
+#curl -fSL -o "$ADB_ZIP" "https://dl.google.com/android/repository/platform-tools-latest-windows.zip"
+curl -fSL -o "$ADB_ZIP" "https://googledownloads.cn/android/repository/platform-tools-latest-windows.zip"
 
 echo "  Extracting adb.exe, AdbWinApi.dll, AdbWinUsbApi.dll..."
 ADB_TMP="/tmp/platform-tools"
@@ -29,9 +30,9 @@ rm -rf "$ADB_TMP"
 # ── scrcpy ──
 echo ""
 echo "[2/2] Downloading scrcpy..."
-LATEST_JSON="$(curl -fSL "https://api.github.com/repos/Genymobile/scrcpy/releases/latest")"
+LATEST_JSON="$(curl -fSL "https://gh-proxy.org/api.github.com/repos/Genymobile/scrcpy/releases/latest")"
 VERSION="$(echo "$LATEST_JSON" | grep '"tag_name":' | sed 's/.*"v\(.*\)",*/\1/')"
-SCRCPY_URL="https://github.com/Genymobile/scrcpy/releases/download/v${VERSION}/scrcpy-win64-v${VERSION}.zip"
+SCRCPY_URL="https://gh-proxy.org/github.com/Genymobile/scrcpy/releases/download/v${VERSION}/scrcpy-win64-v${VERSION}.zip"
 echo "  Version: v${VERSION}"
 
 SCRCPY_ZIP="/tmp/scrcpy-win64-v${VERSION}.zip"
@@ -42,17 +43,13 @@ SCRCPY_TMP="/tmp/scrcpy-win64"
 rm -rf "$SCRCPY_TMP"
 unzip -q -o "$SCRCPY_ZIP" -d "$SCRCPY_TMP"
 
-# Flatten: copy the contents of the innermost directory into OUTPUT_DIR
-EXTRACTED_DIR="$SCRCPY_TMP"
-# scrcpy zip wraps everything in a scrcpy-win64-* folder, dig into it
-INNER="$(find "$SCRCPY_TMP" -maxdepth 2 -type d -name 'scrcpy-win64*' | head -1)"
-if [ -n "$INNER" ]; then
-  EXTRACTED_DIR="$INNER"
+# Copy everything from the extracted folder (handle any dir name)
+EXTRACTED_DIR="$(find "$SCRCPY_TMP" -maxdepth 1 -type d -name 'scrcpy-win64*' | head -1)"
+if [ -n "$EXTRACTED_DIR" ]; then
+  cp -r "$EXTRACTED_DIR"/* "$OUTPUT_DIR/"
+else
+  cp -r "$SCRCPY_TMP"/* "$OUTPUT_DIR/"
 fi
-
-for f in "$EXTRACTED_DIR"/*; do
-  [ -e "$f" ] && cp -r "$f" "$OUTPUT_DIR/"
-done
 
 rm -rf "$SCRCPY_TMP"
 

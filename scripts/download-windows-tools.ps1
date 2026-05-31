@@ -43,12 +43,15 @@ $scrcpyTemp = "$env:TEMP\scrcpy-win64"
 if (Test-Path $scrcpyTemp) { Remove-Item -Recurse -Force $scrcpyTemp }
 Expand-Archive -Path $scrcpyZip -DestinationPath $scrcpyTemp -Force
 
-# Copy everything from the extracted folder to resources
-$extractedDir = Get-ChildItem "$scrcpyTemp\scrcpy-win64*" | Select-Object -First 1
-if ($extractedDir) {
-    Copy-Item "$($extractedDir.FullName)\*" "$OutputDir\" -Recurse -Force
-} else {
-    Copy-Item "$scrcpyTemp\*" "$OutputDir\" -Recurse -Force
+# Flatten: copy the contents of the innermost directory into OutputDir
+$extractedRoot = $scrcpyTemp
+$innerDir = Get-ChildItem "$scrcpyTemp\scrcpy-win64*" -Directory | Select-Object -First 1
+if ($innerDir) {
+    $extractedRoot = $innerDir.FullName
+}
+
+Get-ChildItem $extractedRoot | ForEach-Object {
+    Copy-Item $_.FullName "$OutputDir\" -Recurse -Force
 }
 
 Remove-Item -Recurse -Force $scrcpyTemp
